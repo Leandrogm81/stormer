@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import yfinance as yf # Import yfinance
+import traceback # Import traceback for detailed error logging
 
 # --- Function to Get Stock Data using yfinance --- 
 
@@ -12,42 +13,31 @@ import yfinance as yf # Import yfinance
 def get_stock_data(ticker, start_date_str, end_date_str):
     """
     Fetches historical stock data using the yfinance library.
+    Includes enhanced error logging.
     """
     try:
         st.write(f"Buscando dados para {ticker} de {start_date_str} até {end_date_str} via yfinance...")
         
-        # yfinance expects end_date to be inclusive, so no need to add timedelta(days=1)
-        # However, to ensure we get data *up to* the end_date selected, let's keep the +1 day logic
-        # as yfinance interval '1d' might fetch data at market open time.
         end_date_dt = datetime.strptime(end_date_str, "%Y-%m-%d") + timedelta(days=1)
         end_date_yf_str = end_date_dt.strftime("%Y-%m-%d")
 
+        # Attempt to download data
         data = yf.download(ticker, start=start_date_str, end=end_date_yf_str, progress=False)
 
         if data.empty:
             st.warning(f"Nenhum dado encontrado para {ticker} no período especificado via yfinance.")
             return None
 
-        # yfinance usually returns columns: Open, High, Low, Close, Adj Close, Volume
-        # We need Open, High, Low, Close, Volume
-        # Ensure required columns are present
         required_cols = ["Open", "High", "Low", "Close", "Volume"]
         if not all(col in data.columns for col in required_cols):
             st.error(f"Colunas esperadas não encontradas nos dados do yfinance para {ticker}. Colunas recebidas: {data.columns.tolist()}")
             return None
             
-        # Select and return only the necessary columns
         df = data[required_cols].copy()
-        
-        # Convert index to Date (yfinance index is already Datetime)
         df.index = df.index.date
         df.index.name = "Date"
-
-        # Remove rows with any NaN/None values in price columns
         df.dropna(subset=["Open", "High", "Low", "Close"], inplace=True)
-        # Fill NaN in Volume with 0 if necessary
         df["Volume"] = df["Volume"].fillna(0)
-        # Ensure Volume is integer type
         df["Volume"] = df["Volume"].astype(np.int64)
 
         if df.empty:
@@ -59,7 +49,13 @@ def get_stock_data(ticker, start_date_str, end_date_str):
         return df
 
     except Exception as e:
-        st.error(f"Erro inesperado ao buscar dados para {ticker} via yfinance: {e}")
+        # Enhanced error logging
+        st.error(f"Erro inesperado ao buscar dados para {ticker} via yfinance.")
+        st.error(f"Tipo do Erro: {type(e).__name__}")
+        st.error(f"Mensagem do Erro: {e}")
+        # Display traceback in Streamlit for detailed debugging
+        st.error("Traceback Detalhado:")
+        st.code(traceback.format_exc())
         return None
 
 # --- RSI Calculation Function (no changes needed) --- 
@@ -145,7 +141,6 @@ def run_ifr2_backtest(ticker, data, oversold_level=10, target_days=3, time_stop_
                     exit_reason = "Tempo (Fim Dados)"
 
             if exit_reason:
-                # Ensure entry_price is not zero to avoid division error
                 if entry_price == 0:
                     result_pct = 0
                 else:
@@ -163,22 +158,19 @@ def run_ifr2_backtest(ticker, data, oversold_level=10, target_days=3, time_stop_
                     "Days Held": days_in_trade
                 })
                 in_position = False
-                exit_reason = None # Reset exit reason
-                days_in_trade = 0 # Reset days in trade
-                entry_price = 0.0 # Reset entry price
-                entry_date = None # Reset entry date
-                target_price = 0.0 # Reset target price
+                exit_reason = None 
+                days_in_trade = 0 
+                entry_price = 0.0 
+                entry_date = None 
+                target_price = 0.0 
                 
-                # Skip entry logic for the rest of the current iteration if an exit occurred
                 continue 
 
         # --- Entry Logic ---
-        # Check if already in position (redundant check due to 'continue' above, but safe)
         if not in_position and not pd.isna(prev_rsi):
             if prev_rsi < oversold_level:
-                # Calculate Target Price: Max High of `target_days` prior to *signal* day (i-1)
                 target_calc_start_idx = i - 1 - target_days
-                target_calc_end_idx = i # iloc is exclusive on end, so gets up to i-1
+                target_calc_end_idx = i 
 
                 if target_calc_start_idx >= 0:
                     high_slice = data['High'].iloc[target_calc_start_idx:target_calc_end_idx]
@@ -190,8 +182,6 @@ def run_ifr2_backtest(ticker, data, oversold_level=10, target_days=3, time_stop_
                         days_in_trade = 0
                         data.loc[data.index[i], 'Signal'] = 1
                         data.loc[data.index[i], 'Position'] = 1
-                    # else: st.warning(f"Slice vazia para cálculo do alvo em {current_date}") # Debug
-                # else: st.warning(f"Índice inicial inválido para alvo em {current_date}") # Debug
 
     progress_bar.progress(1.0) 
     if not trades:
@@ -204,7 +194,6 @@ def run_ifr2_backtest(ticker, data, oversold_level=10, target_days=3, time_stop_
 st.title("Backtest IFR2 do Stormer")
 st.sidebar.header("Configurações do Backtest")
 
-# Inputs na sidebar
 tickers_input = st.sidebar.text_input("Ativo(s) (ex: PETR4.SA, VALE3.SA)", "PETR4.SA")
 start_date_input = st.sidebar.date_input("Data de Início", datetime.now() - timedelta(days=365*5))
 end_date_input = st.sidebar.date_input("Data de Fim", datetime.now())
@@ -220,7 +209,6 @@ run_button = st.sidebar.button("Iniciar Backtest")
 # --- Main Logic (no changes needed) --- 
 if run_button:
     tickers = [ticker.strip().upper() for ticker in tickers_input.split(',') if ticker.strip()]
-    # Use selected dates directly for yfinance start/end
     start_date_str = start_date_input.strftime("%Y-%m-%d")
     end_date_str = end_date_input.strftime("%Y-%m-%d")
 
@@ -231,20 +219,14 @@ if run_button:
     else:
         st.header("Resultados do Backtest")
         all_trades = []
-        
-        # Use a placeholder to show processing status
         status_placeholder = st.empty()
 
         for ticker in tickers:
             status_placeholder.subheader(f"Processando: {ticker}")
-            # 1. Obter Dados
             stock_data = get_stock_data(ticker, start_date_str, end_date_str)
 
             if stock_data is not None and not stock_data.empty:
-                # 2. Calcular IFR
                 stock_data = calculate_rsi(stock_data, n=2)
-                
-                # 3. Executar Backtest
                 trades_list, data_with_signals = run_ifr2_backtest(
                     ticker=ticker,
                     data=stock_data.copy(),
@@ -253,23 +235,19 @@ if run_button:
                     time_stop_days=param_time_stop,
                     shares_per_trade=param_shares
                 )
-                
                 if trades_list:
                     all_trades.extend(trades_list)
-            else:
-                st.error(f"Não foi possível obter ou processar dados para {ticker}. Pulando...")
+            # Error message is now handled inside get_stock_data
+            # else:
+            #     st.error(f"Não foi possível obter ou processar dados para {ticker}. Pulando...")
         
-        # Clear status message
         status_placeholder.empty()
 
-        # 4. Exibir Resultados Consolidados
         if all_trades:
             st.subheader("Todas as Operações")
             trades_df = pd.DataFrame(all_trades)
-            # Convert dates before formatting
             trades_df["Entry Date"] = pd.to_datetime(trades_df["Entry Date"])
             trades_df["Exit Date"] = pd.to_datetime(trades_df["Exit Date"])
-            # Format dates for display
             trades_df_display = trades_df.copy()
             trades_df_display["Entry Date"] = trades_df_display["Entry Date"].dt.strftime('%Y-%m-%d')
             trades_df_display["Exit Date"] = trades_df_display["Exit Date"].dt.strftime('%Y-%m-%d')
@@ -308,20 +286,13 @@ if run_button:
             st.write(f"Ganho Médio (Trades Vencedores): R$ {avg_win:.2f}")
             st.write(f"Perda Média (Trades Perdedores): R$ {avg_loss:.2f}")
             
-            # Gráfico de Curva de Capital
             try:
                 trades_df_sorted = trades_df.sort_values(by="Exit Date").copy()
-                trades_df_sorted['Cumulative PnL'] = trades_df_sorted['Result Fin (R$)' ].cumsum()
-                
-                # Create start point DataFrame correctly
-                start_point_date = pd.to_datetime(start_date_str) # Use the actual start date
+                trades_df_sorted['Cumulative PnL'] = trades_df_sorted['Result Fin (R$)'].cumsum()
+                start_point_date = pd.to_datetime(start_date_str) 
                 start_point = pd.DataFrame([{'Exit Date': start_point_date, 'Cumulative PnL': 0}])
-                
-                # Combine start point with trades
                 capital_curve_data = pd.concat([start_point, trades_df_sorted[['Exit Date', 'Cumulative PnL']]], ignore_index=True)
-                
                 st.subheader("Curva de Capital (Simplificada)")
-                # Ensure index is datetime for charting
                 st.line_chart(capital_curve_data.set_index('Exit Date')['Cumulative PnL'])
             except Exception as e:
                 st.warning(f"Não foi possível gerar o gráfico da curva de capital: {e}")

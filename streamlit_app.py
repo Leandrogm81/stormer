@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 import yfinance as yf
 import traceback
 
-# --- Função para Obter Dados de Ações (CORREÇÃO FINAL) ---
-@st.cache_data(ttl=3600) # Cache de 1 hora
+# --- Função para Obter Dados de Ações ---
+@st.cache_data(ttl=3600)
 def get_stock_data(ticker, start_date_str, end_date_str):
     """
     Busca dados históricos de ações, normalizando os nomes das colunas para evitar KeyErrors.
@@ -18,28 +18,23 @@ def get_stock_data(ticker, start_date_str, end_date_str):
         end_date_dt = datetime.strptime(end_date_str, "%Y-%m-%d") + timedelta(days=1)
         end_date_yf_str = end_date_dt.strftime("%Y-%m-%d")
 
-        data = yf.download(ticker, start=start_date_str, end=end_date_yf_str, progress=False)
+        data = yf.download(ticker, start=start_date_str, end=end_date_yf_str, progress=False, auto_adjust=True)
 
         if data.empty:
-            st.warning(f"Nenhum dado encontrado para o ticker '{ticker}'. Verifique o código do ativo e o período.")
+            st.warning(f"Nenhum dado encontrado para o ticker '{ticker}'.")
             return None
 
-        # --- INÍCIO DA CORREÇÃO DEFINITIVA ---
-        # Normaliza os nomes das colunas de forma robusta, lidando com strings e tuplas.
+        # Normaliza os nomes das colunas de forma robusta
         new_columns = []
         for col in data.columns:
-            # Se o nome for uma tupla (multi-index), usa o primeiro item.
             name = col[0] if isinstance(col, tuple) else col
             new_columns.append(str(name).title())
         data.columns = new_columns
-        # --- FIM DA CORREÇÃO DEFINITIVA ---
 
         required_cols = ["Open", "High", "Low", "Close", "Volume"]
-        missing_cols = [col for col in required_cols if col not in data.columns]
-        
-        if missing_cols:
-            st.error(f"Erro para o ticker '{ticker}'. Os dados recebidos não contêm as colunas necessárias: {missing_cols}.")
-            st.info(f"Colunas recebidas (após normalização): {data.columns.tolist()}")
+        if not all(col in data.columns for col in required_cols):
+            st.error(f"Erro para '{ticker}'. Dados recebidos não contêm as colunas necessárias.")
+            st.info(f"Colunas recebidas: {data.columns.tolist()}")
             return None
             
         df = data[required_cols].copy()
@@ -78,7 +73,7 @@ def calculate_rsi(data, n=2):
     rsi = 100 - (100 / (1 + rs))
     
     rsi[avg_loss == 0] = 100
-    rsi[(avg_gain == 0) & (avg_loss == 0)] = np.nan
+    rsi[rsi.isna()] = 50 # Evita NaNs iniciais
     
     data[f"RSI_{n}"] = rsi
     return data
@@ -87,7 +82,7 @@ def calculate_rsi(data, n=2):
 def run_ifr2_backtest(ticker, data, oversold_level, target_days, time_stop_days, shares_per_trade):
     """Executa a simulação de backtest do IFR2 para um único ativo."""
     if f"RSI_2" not in data.columns or data.empty:
-        return [], data
+        return []
 
     trades = []
     in_position = False
@@ -96,7 +91,7 @@ def run_ifr2_backtest(ticker, data, oversold_level, target_days, time_stop_days,
 
     data['RSI_2_Prev'] = data['RSI_2'].shift(1)
 
-    for i in range(target_days + 1, len(data)):
+    for i in range(1, len(data)): # Inicia em 1 por causa do shift
         current_date = data.index[i]
         current_open = data['Open'].iloc[i]
         current_high = data['High'].iloc[i]
@@ -111,25 +106,21 @@ def run_ifr2_backtest(ticker, data, oversold_level, target_days, time_stop_days,
                 exit_price = target_price
                 exit_reason = "Alvo"
             elif days_in_trade >= time_stop_days:
-                if i + 1 < len(data):
-                    exit_price = data['Open'].iloc[i+1]
-                    exit_reason = "Tempo"
-                else:
-                    exit_price = current_close
-                    exit_reason = "Tempo (Fim Dados)"
+                exit_price = current_open
+                exit_reason = "Tempo"
 
             if exit_reason:
                 result_fin = (exit_price - entry_price) * shares_per_trade
                 trades.append({
                     "Ticker": ticker, "Entry Date": entry_date, "Entry Price": entry_price,
-                    "Exit Date": current_date if exit_reason == "Alvo" else data.index[i+1] if exit_reason == "Tempo" else current_date,
-                    "Exit Price": exit_price, "Result Fin (R$)": result_fin,
-                    "Exit Reason": exit_reason, "Days Held": days_in_trade
+                    "Exit Date": current_date, "Exit Price": exit_price, 
+                    "Result Fin (R$)": result_fin, "Exit Reason": exit_reason, 
+                    "Days Held": days_in_trade
                 })
                 in_position = False
 
         if not in_position and not pd.isna(prev_rsi) and prev_rsi < oversold_level:
-            target_calc_start_idx = max(0, i - 1 - target_days)
+            target_calc_start_idx = max(0, i - target_days)
             target_calc_end_idx = i
             high_slice = data['High'].iloc[target_calc_start_idx:target_calc_end_idx]
             if not high_slice.empty:
@@ -138,21 +129,21 @@ def run_ifr2_backtest(ticker, data, oversold_level, target_days, time_stop_days,
                 entry_date = current_date
                 in_position = True
                 days_in_trade = 0
-    return trades, data
+    return trades
 
 # --- Interface do Usuário com Streamlit --- 
 st.set_page_config(layout="wide")
 st.title("Backtest IFR2 do Stormer")
 
 st.sidebar.header("Configurações do Backtest")
-tickers_input = st.sidebar.text_input("Ativo(s) (ex: PETR4.SA, VALE3.SA)", "PETR4.SA")
+tickers_input = st.sidebar.text_input("Ativo(s) (ex: PETR4.SA, VALE3.SA)", "PETR4.SA, MGLU3.SA")
 start_date_input = st.sidebar.date_input("Data de Início", datetime.now() - timedelta(days=365*5))
 end_date_input = st.sidebar.date_input("Data de Fim", datetime.now())
 
 st.sidebar.subheader("Parâmetros da Estratégia")
-param_oversold = st.sidebar.slider("Nível Sobrevenda IFR(2)", 1, 50, 20)
-param_target_days = st.sidebar.number_input("Dias para Alvo (Máx. X Dias)", 1, 10, 3)
-param_time_stop = st.sidebar.number_input("Stop no Tempo (Dias)", 1, 20, 7)
+param_oversold = st.sidebar.slider("Nível Sobrevenda IFR(2)", 1, 50, 20, help="O RSI(2) deve estar abaixo deste nível para gerar um sinal de compra.")
+param_target_days = st.sidebar.number_input("Dias para Alvo (Máx. X Dias)", 1, 10, 3, help="O alvo será a máxima dos últimos X dias antes da entrada.")
+param_time_stop = st.sidebar.number_input("Stop no Tempo (Dias)", 1, 20, 7, help="Se o alvo não for atingido, a operação é encerrada após X dias.")
 param_shares = st.sidebar.number_input("Lote (Ações por Trade)", 1, 10000, 100)
 
 if st.sidebar.button("Iniciar Backtest"):
@@ -163,51 +154,89 @@ if st.sidebar.button("Iniciar Backtest"):
         st.warning("A data de início deve ser anterior à data de fim.")
     else:
         all_trades = []
-        progress_bar = st.progress(0, "Iniciando...")
-        for i, ticker in enumerate(tickers):
-            progress_bar.progress((i) / len(tickers), f"Processando: {ticker}")
-            stock_data = get_stock_data(ticker, start_date_input.strftime("%Y-%m-%d"), end_date_input.strftime("%Y-%m-%d"))
-            if stock_data is not None:
-                stock_data_rsi = calculate_rsi(stock_data, n=2)
-                trades_list, _ = run_ifr2_backtest(
-                    ticker, stock_data_rsi.copy(), param_oversold, param_target_days, param_time_stop, param_shares
-                )
-                if trades_list:
-                    all_trades.extend(trades_list)
-        progress_bar.progress(1.0, "Backtest concluído!")
+        with st.spinner('Executando backtest... Por favor, aguarde.'):
+            for ticker in tickers:
+                stock_data = get_stock_data(ticker, start_date_input.strftime("%Y-%m-%d"), end_date_input.strftime("%Y-%m-%d"))
+                if stock_data is not None:
+                    stock_data_rsi = calculate_rsi(stock_data, n=2)
+                    trades_list = run_ifr2_backtest(
+                        ticker, stock_data_rsi.copy(), param_oversold, param_target_days, param_time_stop, param_shares
+                    )
+                    if trades_list:
+                        all_trades.extend(trades_list)
         
         st.header("Resultados Consolidados")
         if all_trades:
             trades_df = pd.DataFrame(all_trades)
+            trades_df['Entry Date'] = pd.to_datetime(trades_df['Entry Date'])
+            trades_df['Exit Date'] = pd.to_datetime(trades_df['Exit Date'])
+            trades_df = trades_df.sort_values(by="Exit Date")
             trades_df["Result (%)"] = ((trades_df["Exit Price"] - trades_df["Entry Price"]) / trades_df["Entry Price"]) * 100
             
-            st.subheader("Todas as Operações")
-            st.dataframe(trades_df.style.format({
-                "Entry Price": "R$ {:.2f}", "Exit Price": "R$ {:.2f}", 
-                "Result (%)": "{:.2f}%", "Result Fin (R$)": "R$ {:,.2f}"
-            }))
-
-            st.subheader("Métricas de Desempenho")
+            # --- NOVAS MÉTRICAS ---
             total_trades = len(trades_df)
             winners = trades_df[trades_df["Result Fin (R$)"] > 0]
+            losers = trades_df[trades_df["Result Fin (R$)"] <= 0]
+            
             win_rate = (len(winners) / total_trades) * 100 if total_trades > 0 else 0
             total_pnl = trades_df["Result Fin (R$)"].sum()
             avg_win = winners["Result Fin (R$)"].mean() if len(winners) > 0 else 0
-            avg_loss = trades_df[trades_df["Result Fin (R$)"] <= 0]['Result Fin (R$)'].mean() if len(winners) < total_trades else 0
+            avg_loss = losers["Result Fin (R$)"].mean() if len(losers) > 0 else 0
             payoff = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+            avg_days = trades_df["Days Held"].mean()
+            max_profit = trades_df["Result Fin (R$)"].max()
+            max_loss = trades_df["Result Fin (R$)"].min()
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Total de Trades", total_trades)
-            col2.metric("Taxa de Acerto", f"{win_rate:.2f}%")
-            col3.metric("Payoff Ratio", f"{payoff:.2f}")
-
-            st.metric("Lucro/Prejuízo Total", f"R$ {total_pnl:,.2f}")
-
-            # Curva de Capital
-            trades_df = trades_df.sort_values(by="Exit Date")
+            # Cálculo do Drawdown
+            initial_capital = 50000 # Capital inicial hipotético para o cálculo
             trades_df['Cumulative PnL'] = trades_df['Result Fin (R$)'].cumsum()
-            st.subheader("Curva de Capital")
-            st.line_chart(trades_df.set_index('Exit Date')['Cumulative PnL'])
+            trades_df['Capital'] = initial_capital + trades_df['Cumulative PnL']
+            trades_df['Peak'] = trades_df['Capital'].cummax()
+            trades_df['Drawdown Pct'] = ((trades_df['Capital'] - trades_df['Peak']) / trades_df['Peak']) * 100
+            max_drawdown = trades_df['Drawdown Pct'].min() if not trades_df['Drawdown Pct'].empty else 0
+
+            # --- NOVO CÁLCULO ---
+            return_pct = (total_pnl / initial_capital) * 100 if initial_capital > 0 else 0
+
+            # --- NOVA ESTRUTURA DE EXIBIÇÃO ---
+            st.subheader("Métricas de Desempenho")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Lucro/Prejuízo Total", f"R$ {total_pnl:,.2f}")
+            col2.metric("Retorno sobre Capital", f"{return_pct:.2f}%")
+            col3.metric("Total de Trades", f"{total_trades}")
+            col4.metric("Taxa de Acerto", f"{win_rate:.2f}%")
+            
+            col5, col6, col7 = st.columns(3)
+            col5.metric("Payoff Ratio", f"{payoff:.2f}")
+            col6.metric("Média de Dias/Trade", f"{avg_days:.1f}")
+            col7.metric("Drawdown Máximo", f"{max_drawdown:.2f}%")
+            
+            st.write("---")
+            
+            col8, col9 = st.columns(2)
+            with col8:
+                st.subheader("Performance dos Ganhos")
+                st.metric("Média de Ganho", f"R$ {avg_win:,.2f}", delta_color="normal")
+                st.metric("Maior Lucro", f"R$ {max_profit:,.2f}", delta_color="normal")
+            with col9:
+                st.subheader("Performance das Perdas")
+                st.metric("Média de Perda", f"R$ {avg_loss:,.2f}", delta_color="inverse")
+                st.metric("Maior Prejuízo", f"R$ {max_loss:,.2f}", delta_color="inverse")
+            
+            st.write("---")
+            
+            st.subheader("Evolução do Capital")
+            st.line_chart(trades_df.set_index('Exit Date')['Capital'])
+            
+            st.subheader("Curva de Drawdown (%)")
+            st.area_chart(trades_df.set_index('Exit Date')['Drawdown Pct'])
+
+            st.subheader("Tabela de Operações")
+            st.dataframe(trades_df[['Ticker', 'Entry Date', 'Entry Price', 'Exit Date', 'Exit Price', 'Result (%)', 'Result Fin (R$)', 'Exit Reason', 'Days Held']].style.format({
+                "Entry Price": "R$ {:.2f}", "Exit Price": "R$ {:.2f}", 
+                "Result (%)": "{:.2f}%", "Result Fin (R$)": "R$ {:,.2f}"
+            }))
         else:
             st.info("Nenhuma operação foi executada para os ativos e parâmetros fornecidos.")
 else:

@@ -25,9 +25,13 @@ def get_stock_data(ticker, start_date_str, end_date_str):
             return None
 
         # --- INÍCIO DA CORREÇÃO DEFINITIVA ---
-        # Normaliza os nomes das colunas para Title Case (ex: 'open' -> 'Open')
-        # Isso resolve o problema de variação de maiúsculas/minúsculas da API.
-        data.columns = [col.title() for col in data.columns]
+        # Normaliza os nomes das colunas de forma robusta, lidando com strings e tuplas.
+        new_columns = []
+        for col in data.columns:
+            # Se o nome for uma tupla (multi-index), usa o primeiro item.
+            name = col[0] if isinstance(col, tuple) else col
+            new_columns.append(str(name).title())
+        data.columns = new_columns
         # --- FIM DA CORREÇÃO DEFINITIVA ---
 
         required_cols = ["Open", "High", "Low", "Close", "Volume"]
@@ -41,7 +45,6 @@ def get_stock_data(ticker, start_date_str, end_date_str):
         df = data[required_cols].copy()
         df.index = df.index.date
         df.index.name = "Date"
-        # O dropna agora deve funcionar com segurança
         df.dropna(subset=["Open", "High", "Low", "Close"], inplace=True)
         df["Volume"] = df["Volume"].fillna(0).astype(np.int64)
 

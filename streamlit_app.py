@@ -6,6 +6,24 @@ from datetime import datetime, timedelta
 import yfinance as yf
 import traceback
 
+# --- LISTA DE ATIVOS DO IBOVESPA ---
+# Uma lista com os principais ativos para facilitar a seleção do usuário.
+IBOVESPA_STOCKS = [
+    'ABEV3.SA', 'AZUL4.SA', 'B3SA3.SA', 'BBAS3.SA', 'BBDC3.SA', 'BBDC4.SA', 
+    'BBSE3.SA', 'BEEF3.SA', 'BPAC11.SA', 'BRAP4.SA', 'BRFS3.SA', 'BRKM5.SA', 
+    'CCRO3.SA', 'CIEL3.SA', 'CMIG4.SA', 'COGN3.SA', 'CPFE3.SA', 'CPLE6.SA', 
+    'CRFB3.SA', 'CSAN3.SA', 'CSNA3.SA', 'CVCB3.SA', 'CYRE3.SA', 'ECOR3.SA', 
+    'EGIE3.SA', 'ELET3.SA', 'ELET6.SA', 'EMBR3.SA', 'ENBR3.SA', 'ENGIE3.SA', 
+    'ENEV3.SA', 'EQTL3.SA', 'EZTC3.SA', 'FLRY3.SA', 'GGBR4.SA', 'GOAU4.SA', 
+    'GOLL4.SA', 'HAPV3.SA', 'HYPE3.SA', 'IGTI11.SA', 'IRBR3.SA', 'ITSA4.SA', 
+    'ITUB4.SA', 'JBSS3.SA', 'KLBN11.SA', 'LREN3.SA', 'LWSA3.SA', 'MGLU3.SA', 
+    'MRFG3.SA', 'MRVE3.SA', 'MULT3.SA', 'NTCO3.SA', 'PCAR3.SA', 'PETR3.SA', 
+    'PETR4.SA', 'PRIO3.SA', 'RADL3.SA', 'RAIL3.SA', 'RDOR3.SA', 'RENT3.SA', 
+    'RRRP3.SA', 'SANB11.SA', 'SBSP3.SA', 'SLCE3.SA', 'SOMA3.SA', 'SUZB3.SA', 
+    'TAEE11.SA', 'TIMS3.SA', 'TOTS3.SA', 'UGPA3.SA', 'USIM5.SA', 'VALE3.SA', 
+    'VBBR3.SA', 'VIVT3.SA', 'WEGE3.SA', 'YDUQ3.SA'
+]
+
 # --- Função para Obter Dados de Ações ---
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker, start_date_str, end_date_str):
@@ -136,7 +154,14 @@ st.set_page_config(layout="wide")
 st.title("Backtest IFR2 do Stormer")
 
 st.sidebar.header("Configurações do Backtest")
-tickers_input = st.sidebar.text_input("Ativo(s) (ex: PETR4.SA, VALE3.SA)", "PETR4.SA, MGLU3.SA")
+
+# --- MUDANÇA: de text_input para multiselect ---
+tickers_input = st.sidebar.multiselect(
+    "Selecione os Ativos",
+    options=IBOVESPA_STOCKS,
+    default=['PETR4.SA', 'VALE3.SA', 'ITUB4.SA', 'MGLU3.SA'] # Ativos pré-selecionados
+)
+
 start_date_input = st.sidebar.date_input("Data de Início", datetime.now() - timedelta(days=365*5))
 end_date_input = st.sidebar.date_input("Data de Fim", datetime.now())
 
@@ -147,9 +172,10 @@ param_time_stop = st.sidebar.number_input("Stop no Tempo (Dias)", 1, 20, 7, help
 param_shares = st.sidebar.number_input("Lote (Ações por Trade)", 1, 10000, 100)
 
 if st.sidebar.button("Iniciar Backtest"):
-    tickers = [ticker.strip().upper() for ticker in tickers_input.split(',') if ticker.strip()]
+    # --- MUDANÇA: A variável 'tickers_input' já é uma lista ---
+    tickers = tickers_input 
     if not tickers:
-        st.warning("Por favor, insira pelo menos um ticker de ativo.")
+        st.warning("Por favor, selecione pelo menos um ticker de ativo.")
     elif start_date_input >= end_date_input:
         st.warning("A data de início deve ser anterior à data de fim.")
     else:
@@ -173,7 +199,7 @@ if st.sidebar.button("Iniciar Backtest"):
             trades_df = trades_df.sort_values(by="Exit Date")
             trades_df["Result (%)"] = ((trades_df["Exit Price"] - trades_df["Entry Price"]) / trades_df["Entry Price"]) * 100
             
-            # --- NOVAS MÉTRICAS ---
+            # --- Métricas de Desempenho ---
             total_trades = len(trades_df)
             winners = trades_df[trades_df["Result Fin (R$)"] > 0]
             losers = trades_df[trades_df["Result Fin (R$)"] <= 0]
@@ -187,18 +213,15 @@ if st.sidebar.button("Iniciar Backtest"):
             max_profit = trades_df["Result Fin (R$)"].max()
             max_loss = trades_df["Result Fin (R$)"].min()
 
-            # Cálculo do Drawdown
-            initial_capital = 50000 # Capital inicial hipotético para o cálculo
+            initial_capital = 50000 
             trades_df['Cumulative PnL'] = trades_df['Result Fin (R$)'].cumsum()
             trades_df['Capital'] = initial_capital + trades_df['Cumulative PnL']
             trades_df['Peak'] = trades_df['Capital'].cummax()
             trades_df['Drawdown Pct'] = ((trades_df['Capital'] - trades_df['Peak']) / trades_df['Peak']) * 100
             max_drawdown = trades_df['Drawdown Pct'].min() if not trades_df['Drawdown Pct'].empty else 0
-
-            # --- NOVO CÁLCULO ---
             return_pct = (total_pnl / initial_capital) * 100 if initial_capital > 0 else 0
 
-            # --- NOVA ESTRUTURA DE EXIBIÇÃO ---
+            # --- Exibição das Métricas ---
             st.subheader("Métricas de Desempenho")
             
             col1, col2, col3, col4 = st.columns(4)
